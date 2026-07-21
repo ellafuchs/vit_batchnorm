@@ -9,6 +9,37 @@ A pretrained pre-LN Vision Transformer can be converted post-hoc into an
 all-BatchNorm ViT that folds entirely into adjacent linear layers, recovering
 most of its ImageNet-1k top-1 accuracy at a small fraction of pretraining cost.
 
+## Deployment target: Hailo
+
+The concrete driver is deployment on a Hailo edge accelerator. The rest of the
+ViT already compiles under the Hailo Dataflow Compiler; **LayerNorm is the sole
+blocking operator**. This is confirmed empirically, not assumed, and it makes the
+project's premise a fact rather than a hypothesis.
+
+The Hailo toolchain is built around the CNN convention that normalization folds
+into the preceding layer at compile time. LayerNorm violates it — its statistics
+are computed at runtime, so there is nothing to fold. Converting to BatchNorm
+makes a ViT satisfy an assumption the compiler already depends on.
+
+Hailo supports BatchNorm and folds it into the preceding layer itself, as a
+standard compiler pass. Folding in PyTorch is therefore **not** required for
+deployment. Two graphs are exported:
+
+- `vit_bn.onnx` — BatchNorm intact, folded by the DFC. The deployment artifact.
+- `vit_bn_folded.onnx` — folded in PyTorch, no normalization nodes at all. The
+  verification artifact, and the one benchmarked on GPU during development.
+
+Because BatchNorm folding is exact algebra, the two must produce identical
+outputs on device. A disagreement indicates a genuine bug in one of the two fold
+implementations and is worth surfacing.
+
+Success is therefore binary and externally verifiable: **the model compiles to a
+HEF and retains accuracy.** GPU latency remains useful as a fast development
+proxy, but on-device throughput is the number that matters.
+
+Quantization is deliberately out of scope for this phase. It is a later stage and
+none of the conversion work depends on it.
+
 ## Motivation
 
 LayerNorm computes its statistics at inference time, so it can never be folded
