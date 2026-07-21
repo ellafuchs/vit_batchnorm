@@ -151,9 +151,21 @@ print(f'{n / (time.time() - t):.0f} img/s')
 "
 ```
 
-Expected: 1,500–4,000 img/s depending on CPU. **This number sets your training time.** At 2,000 img/s a 300-epoch run is 384M/2000 ≈ 53 hours; at 4,000 it is 27.
+**This number sets your training time.** The GPU needs only ~8 hours for a 300-epoch run; everything above that is the loader idling it.
 
-If below ~1,500 img/s, fix it before training rather than after — raise `--workers`, or pre-resize the dataset to shorter-side 160px, which typically doubles throughput.
+```
+384M image-passes / throughput = data hours
+   2,000 img/s → 53 h      4,000 img/s → 27 h      8,000 img/s → 13 h
+```
+
+Target **≥ 8,000 img/s**, which puts wall clock at ~14 hours — the GPU becomes the bottleneck and there is nothing further to gain. Escalate in this order and re-measure after each:
+
+1. **Raise `--workers`** to roughly your vCPU count. Free. Often gets 3,000–4,000.
+2. **NVIDIA DALI** — moves JPEG decode onto the GPU's hardware decoder, freeing the CPU entirely. Usually the single biggest win for 224px training and the one to reach for first if workers aren't enough.
+3. **Pre-resize to shorter-side 256, re-encode JPEG q90.** ~1 hour one-time; smaller images decode faster. Roughly 2×. Note 256, not 160 — `RandomResizedCrop(224)` needs headroom above 224.
+4. **FFCV** — largest speedup, most setup. Only if the above fall short.
+
+Do not start the full run below ~4,000 img/s. An hour spent here saves a day of a GPU you are renting.
 
 - [ ] **Step 5: Commit**
 
@@ -484,19 +496,16 @@ PYTHONPATH=src .venv/bin/python timm-src/train.py "$IMAGENET" \
     --checkpoint-hist 3 --log-interval 100
 ```
 
-- [ ] **Step 2: Launch the staged run first**
+- [ ] **Step 2: Launch the full run**
 
-A 100-epoch run at 160px gives a real signal in about a day and tells you whether the full schedule is worth it.
+Run: `./scripts/train.sh`
+Expected: **~14 hours** at ≥8,000 img/s (defaults are 300 epochs, 224px, batch 512). Target top-1 near **72.2%**, directly comparable to DeiT-Ti — same data, same schedule, same recipe, same resolution. No caveats to explain away.
 
-Run: `EPOCHS=100 RES=160 ./scripts/train.sh`
-Expected: ~1 day. Top-1 in the mid-60s. `timm` writes `summary.csv` per epoch, so progress is checkable at any point.
+The reduced-resolution and short-schedule variants exist as `EPOCHS=` and `RES=` overrides, but with a healthy loader they buy little: the GPU floor is ~8 hours regardless, so a 100-epoch run at 160px saves maybe 9 hours and costs 5+ points of top-1. Use them only if Step 4 of Task 1 came in below ~4,000 img/s and you cannot fix it.
 
-Watch the first two epochs. A NaN or a loss spike means BatchNorm instability — kill it, set `--warmup-epochs 10`, relaunch. Better to lose an hour than a day.
+**Watch the first two epochs, then you can leave it.** A NaN or a loss spike means BatchNorm instability — kill it, set `--warmup-epochs 10`, relaunch. Ten minutes of attention protects the overnight run.
 
-- [ ] **Step 3: Launch the full run if the staged run looks healthy**
-
-Run: `EPOCHS=300 RES=224 ./scripts/train.sh`
-Expected: 2–3 days. Target top-1 near **72.2%**.
+`timm` writes `summary.csv` after every epoch, so progress is checkable at any time without disturbing the run.
 
 - [ ] **Step 4: Record the result**
 
