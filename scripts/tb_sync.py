@@ -30,7 +30,14 @@ def find_summaries(output: Path) -> list[Path]:
                   set(output.glob("train/*/summary.csv")))
 
 
-def sync_once(csv_path: Path, tb_root: Path, seen: dict[Path, int]) -> int:
+# The only two numbers worth watching. train_loss must fall, eval_top1
+# must rise; everything else timm records is supporting detail that just
+# clutters the page. Pass --all to keep the rest.
+DEFAULT_METRICS = ("train_loss", "eval_top1")
+
+
+def sync_once(csv_path: Path, tb_root: Path, seen: dict[Path, int],
+              metrics: tuple[str, ...] | None) -> int:
     """Write any rows we have not written yet. Returns rows written."""
     with csv_path.open() as fh:
         rows = list(csv.DictReader(fh))
@@ -45,6 +52,8 @@ def sync_once(csv_path: Path, tb_root: Path, seen: dict[Path, int]) -> int:
         step = int(float(row.get("epoch", i)))
         for key, value in row.items():
             if key == "epoch":
+                continue
+            if metrics is not None and key not in metrics:
                 continue
             try:
                 writer.add_scalar(key, float(value), step)
@@ -63,6 +72,8 @@ def main() -> None:
     ap.add_argument("--output", default="output", help="timm --output dir")
     ap.add_argument("--interval", type=float, default=30.0, help="seconds")
     ap.add_argument("--once", action="store_true", help="sync and exit")
+    ap.add_argument("--all", action="store_true",
+                    help="write every column, not just train_loss/eval_top1")
     args = ap.parse_args()
 
     output = Path(args.output)
@@ -70,10 +81,13 @@ def main() -> None:
     tb_root.mkdir(parents=True, exist_ok=True)
     print(f"watching {output}/train/*/summary.csv -> {tb_root}")
 
+    metrics = None if args.all else DEFAULT_METRICS
+    print(f"metrics: {'all' if args.all else ', '.join(DEFAULT_METRICS)}")
+
     seen: dict[Path, int] = {}
     while True:
         for csv_path in find_summaries(output):
-            n = sync_once(csv_path, tb_root, seen)
+            n = sync_once(csv_path, tb_root, seen, metrics)
             if n:
                 print(f"  {csv_path.parent.name}: +{n} epoch(s), "
                       f"{seen[csv_path]} total")
