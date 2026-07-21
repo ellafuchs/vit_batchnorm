@@ -291,6 +291,27 @@ size (scaling arm).
 
 **Artifact:** the conversion recipe, as reproducible code.
 
+## Success criterion
+
+**Primary goal: all 25 LayerNorms replaced by BatchNorm, folded away, with no
+accuracy loss.**
+
+These two requirements — full conversion and losslessness — may not both be
+achievable, since replacing a nonlinear normalizer with an affine one strictly
+reduces the expressible function class. The project does not have to resolve that
+tension up front. Experiment 0 establishes within roughly a day whether full
+conversion is plausibly cheap, before any method is built.
+
+If they prove incompatible, the documented fallback is to relax *coverage* rather
+than *accuracy*: maximize the number of folded norms subject to a top-1 loss
+budget ε, converting cumulatively in order of the damage ranking from Experiment
+0 and stopping before ε is breached. This is a fallback, not the headline. The
+result would then be reported as a coverage/accuracy curve, and the norms that
+resist conversion are themselves a finding about what LayerNorm provides in a ViT.
+
+Note that the *fold* is lossless unconditionally — it is exact algebra, verified
+to 1e-4. Only the LN→BN substitution can cost accuracy.
+
 ## Acceptable outcomes
 
 A result of the form "24 of 25 norms folded, `LN_f` retained, 1.5 points of top-1
