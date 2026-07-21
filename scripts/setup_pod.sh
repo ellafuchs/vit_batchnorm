@@ -25,7 +25,9 @@ else
     echo "$TIMM_SRC/train.py already patched"
 fi
 
-pip install -q -U timm wandb
+# webdataset is required to read the sharded .tar dataset; timm does not
+# depend on it directly and errors out at dataset creation without it.
+pip install -q -U timm wandb 'webdataset>=0.2,<1.0'
 
 echo
 echo "--- verifying the model ---"
