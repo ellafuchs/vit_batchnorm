@@ -23,7 +23,11 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 def find_summaries(output: Path) -> list[Path]:
-    return sorted(output.glob("train/*/summary.csv"))
+    """timm writes output/<timestamp>-<model>-<res>/summary.csv when
+    --experiment is unset, and output/train/<experiment>/ when it is set.
+    Look for both."""
+    return sorted(set(output.glob("*/summary.csv")) |
+                  set(output.glob("train/*/summary.csv")))
 
 
 def sync_once(csv_path: Path, tb_root: Path, seen: dict[Path, int]) -> int:
