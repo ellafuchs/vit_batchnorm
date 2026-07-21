@@ -111,11 +111,18 @@ pretrained weights already do it and it yields one universally comparable number
 
 **Models:** all `timm` pretrained, published top-1 as the reference line.
 
-| Model | Width | Blocks | Norms | Reference top-1 |
-|---|---|---|---|---|
-| ViT-Tiny/16 | 192 | 12 | 25 | ~75.5% |
-| ViT-S/16 | 384 | 12 | 25 | ~81.4% |
-| ViT-B/16 | 768 | 12 | 25 | ~81.1% |
+All three from the same `augreg_in21k_ft_in1k` checkpoint family, so the scaling
+arm varies only model size:
+
+| Model | `timm` checkpoint | Width | Blocks | Norms | Reference top-1 |
+|---|---|---|---|---|---|
+| ViT-Tiny/16 | `vit_tiny_patch16_224.augreg_in21k_ft_in1k` | 192 | 12 | 25 | ~75.5% |
+| ViT-S/16 | `vit_small_patch16_224.augreg_in21k_ft_in1k` | 384 | 12 | 25 | ~81.4% |
+| ViT-B/16 | `vit_base_patch16_224.augreg_in21k_ft_in1k` | 768 | 12 | 25 | ~84.5% |
+
+Reference top-1 values above are approximate. The authoritative number for each
+model is whatever the unmodified checkpoint scores in our own evaluation harness,
+which the teacher-reproduction gate establishes before any conversion work.
 
 ViT-Tiny is primary; S/16 and B/16 form the scaling arm.
 
