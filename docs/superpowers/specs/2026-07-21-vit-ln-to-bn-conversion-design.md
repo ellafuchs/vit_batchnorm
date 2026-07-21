@@ -29,7 +29,67 @@ memory-bound operations that break kernel fusion, and they occupy a larger
 fraction of runtime at small model widths. The payoff is measured as wall-clock
 latency, not FLOPs.
 
+## The target artifact
+
+The deliverable is a model with **zero normalization operations in the inference
+graph**:
+
+```
+before:   x = x + Attn( BN(x) )        BN → qkv:  Linear(D → 3D)
+          x = x + MLP(  BN(x) )        BN → fc1:  Linear(D → 4D)
+
+after:    x = x + Attn( x )            qkv' absorbs the BN
+          x = x + MLP(  x )            fc1' absorbs the BN
+```
+
+```python
+s  = gamma / sqrt(running_var + eps)
+W' = W * s                                    # scale columns
+b' = b + W @ (beta - running_mean * s)
+```
+
+All 25 norms are absorbed into `qkv`, `fc1`, and `head`. Parameter count is
+marginally *lower* (25×2×D affine parameters removed), outputs are identical to
+floating-point tolerance, and 25 memory-bound operations — each a barrier to
+kernel fusion — leave the graph.
+
+Two consequences constrain the pipeline:
+
+- **Folding is irreversible and must come last.** Once BN is absorbed it can no
+  longer be trained. Fixed order: convert → reconstruct → distill → fold →
+  benchmark.
+- **Accuracy is reported from the folded model**, with fold equivalence asserted
+  against the unfolded student. If the two disagree, the result is void.
+
 ## Why this is hard
+
+### Calibration alone cannot work, in principle
+
+```
+LN(x)_t  = (x_t − μ(x_t)) / σ(x_t) · γ + β        μ, σ computed per token
+BN(x)_t  = (x_t − μ_run)  / σ_run   · γ + β        μ, σ fixed constants
+```
+
+LayerNorm's normalizer is computed from each token at runtime, making LN a
+*nonlinear* function of its input. BatchNorm at eval time divides by a single
+constant vector shared across all tokens, making it *affine* — which is exactly
+why it folds, and exactly why it cannot imitate LayerNorm. No choice of
+`μ_run, σ_run` makes an affine map equal a nonlinear one; calibration merely
+selects the best constants within the wrong function class.
+
+This is why arms A and B are **controls that are expected to fail**, not
+candidate methods. Their purpose is to quantify the gap so that recovery in arm
+C can be attributed to the right cause.
+
+The actual bet is therefore not *"can BatchNorm mimic LayerNorm?"* — it cannot —
+but **"can the surrounding weights be re-fit so the network no longer requires
+per-token normalization?"** That is why arms C and D modify weights while A and B
+do not. The network is not asked to reproduce LN's function; it is asked to
+become a network that does not need it. This is plausible because much of what LN
+provides is scale control that a well-conditioned network may not strictly
+require, but it is genuinely uncertain, and it is the research question.
+
+### Why the change of axis damages a trained model
 
 LayerNorm normalizes each token over the channel dimension. The BatchNorm
 replacement normalizes each channel over batch and tokens jointly. That change
@@ -101,8 +161,8 @@ Five independent, separately testable modules:
 
 | Module | Responsibility | Depends on |
 |---|---|---|
-| `norm_swap` | Replace LN modules with BN in a `timm` ViT, in-place, selectable by layer index. Pure surgery, no training. | `timm` |
-| `calibrate` | Forward-only pass populating BN running statistics. | `norm_swap` |
+| `norm_swap` | Replace LN modules with BN in a `timm` ViT, in-place, selectable by layer index. Copies LN's learned `γ`/`β` into the BN's `weight`/`bias` — same shape `(D,)`, same role, a far better initialization than the default 1/0. Pure surgery, no training. | `timm` |
+| `calibrate` | Forward-only pass populating BN running statistics. No loss, no gradients, no optimizer — BatchNorm updates `running_mean`/`running_var` as a side effect of the forward pass in `train()` mode. Measurement, not learning. | `norm_swap` |
 | `reconstruct` | Block-wise: cache teacher activations for block *k*, optimize student block *k* to match. Loops over blocks. | `norm_swap` |
 | `distill` | Short global fine-tune, student against frozen teacher. | `reconstruct` |
 | `evaluate` | Top-1 on val, fold correctness verification, latency benchmark. | — |
@@ -135,10 +195,19 @@ timm pretrained ViT ──┬── frozen teacher ──→ activations, logits
 
 ### Experiment 0 — per-layer damage (run first)
 
-Convert exactly one LN to BN, calibrate it, evaluate. Repeat for all 25. Roughly
-25 eval passes on ViT-Tiny, under an hour. Identifies which norms are fragile
-before any method is built. Prediction: `LN_f` and the early blocks hurt most.
-Produces a diagnostic figure and shapes all downstream choices.
+Convert exactly one LN to BN, calibrate it, evaluate. Repeat for all 25. **No
+training** — calibration is forward passes only. Roughly 25 eval passes on
+ViT-Tiny, under an hour; run the sweep on a fixed 10k subset of val for speed and
+confirm interesting layers on the full set.
+
+Calibration-only is the correct diagnostic here *precisely because* it is
+guaranteed not to repair anything. It isolates the damage caused by the change of
+function class, with no confound from retraining. It measures harm; it does not
+attempt a fix.
+
+Identifies which norms are fragile before any method is built. Prediction: `LN_f`
+and the early blocks hurt most. Produces a diagnostic figure and shapes all
+downstream choices.
 
 ### The four arms
 
