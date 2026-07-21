@@ -15,6 +15,12 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA="${DATA:-/workspace/imagenet-wds}"
 TIMM_SRC="${TIMM_SRC:-/workspace/timm-src}"
+WANDB="${WANDB:-1}"
+
+# Live charts at wandb.ai, saved permanently. Run `wandb login` once first.
+# Set WANDB=0 to run without it.
+EXTRA=()
+[ "$WANDB" = "1" ] && EXTRA+=(--log-wandb)
 
 PYTHONPATH="$REPO/src" python "$TIMM_SRC/train.py" \
     --data-dir "$DATA" \
@@ -26,4 +32,5 @@ PYTHONPATH="$REPO/src" python "$TIMM_SRC/train.py" \
     --sched cosine --epochs 2 --warmup-epochs 0 \
     --smoothing 0.1 --clip-grad 1.0 --amp \
     --log-interval 20 \
-    --output "$REPO/output" --experiment smoke
+    --output "$REPO/output" --experiment smoke \
+    "${EXTRA[@]}"
