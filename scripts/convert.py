@@ -68,13 +68,9 @@ def calibrate(model, loader, device, num_batches=150):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", default="/workspace/imagenet-wds")
-    ap.add_argument("--stage", choices=["a", "b"], default="a",
-                    help="a=naive swap, b=swap+calibrate. c (fine-tune) is a "
-                         "separate training run, see convert_finetune.sh")
+    ap.add_argument("--out", default="output/converted_init.pth",
+                    help="where to save the converted weights")
     args = ap.parse_args()
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("loading pretrained DeiT-Ti (LayerNorm) ...")
     model = timm.create_model("deit_tiny_patch16_224", pretrained=True)
@@ -86,15 +82,26 @@ def main():
     ln = sum(isinstance(m, nn.LayerNorm) for m in model.modules())
     print(f"  BatchNorms after swap:  {bn}")
     print(f"  LayerNorms after swap:  {ln}")
-    model.to(device)
 
-    # NOTE: eval on the wds val split needs the same loader timm's
-    # validate.py builds. This scaffold stops here on purpose -- the actual
-    # eval and calibration loaders are wired up on the pod, where the data
-    # lives, in convert_finetune.sh. This file is the conversion logic and
-    # the two no-train gates; it is intentionally not a full runner.
-    print("\nswap logic verified. Stage A/B eval + Stage C fine-tune run on "
-          "the pod via convert_finetune.sh.")
+    assert bn == 25 and ln == 0, "swap incomplete"
+
+    # Confirm the converted state_dict loads into our registered BatchNorm
+    # model -- this is what convert_finetune.sh fine-tunes. A key mismatch
+    # here would mean the fine-tune silently starts from random weights,
+    # which is exactly the bug this whole check exists to prevent.
+    ref = timm.create_model("vit_tiny_patch16_224_bn")
+    missing, unexpected = ref.load_state_dict(model.state_dict(), strict=False)
+    assert not unexpected, f"unexpected keys: {unexpected[:5]}"
+    # Only BN running stats may be missing; fine-tuning populates them.
+    bad = [k for k in missing
+           if "running_" not in k and "num_batches" not in k]
+    assert not bad, f"missing weight keys: {bad[:5]}"
+
+    import os
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    torch.save(model.state_dict(), args.out)
+    print(f"\nsaved converted weights -> {args.out}")
+    print("next: bash scripts/convert_finetune.sh")
 
 
 if __name__ == "__main__":
