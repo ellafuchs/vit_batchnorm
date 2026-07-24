@@ -32,6 +32,10 @@ EXP="bn_e${EPOCHS}_r${RES}_b${BATCH}"
 
 EXTRA=()
 [ "$WANDB" = "1" ] && EXTRA+=(--log-wandb --experiment "$EXP")
+# RESUME=<checkpoint> continues an interrupted run: timm restores the epoch,
+# optimizer and schedule, so it picks up where it stopped on the SAME cosine
+# curve rather than starting a fresh one.
+[ -n "${RESUME:-}" ] && EXTRA+=(--resume "$RESUME")
 
 echo "run:    $EXP"
 echo "lr:     $LR  (scaled from batch $BATCH)"
